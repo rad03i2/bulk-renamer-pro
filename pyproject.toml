@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bulk-renamer-pro"
+version = "1.0.0"
+description = "Safe, preview-first batch file renaming with rollback manifests."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "Radwan Abdulhadi Ahmed"}]
+keywords = ["rename", "files", "cli", "automation", "batch"]
+classifiers = ["Programming Language :: Python :: 3", "License :: OSI Approved :: MIT License"]
+
+[project.scripts]
+bulk-renamer = "bulk_renamer.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/bulk_renamer"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
