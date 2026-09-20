@@ -71,10 +71,13 @@ def plan(directory: Path, *, prefix: str = "file", start: int = 1, width: int = 
     return ops
 
 
+def _temp_for(path: Path, index: int, label: str) -> Path:
+    return path.with_name(f".{path.name}.bulk-renamer-{label}-{os.getpid()}-{index}.tmp")
+
+
 def apply(ops: list[RenameOp], manifest: Path) -> Path:
     if not ops:
         raise ValueError("Nothing to rename")
-    # Revalidate content and targets immediately before mutating anything.
     source_paths = {Path(op.source).resolve() for op in ops}
     for op in ops:
         src, dst = Path(op.source), Path(op.target)
@@ -83,23 +86,20 @@ def apply(ops: list[RenameOp], manifest: Path) -> Path:
         if dst.exists() and dst.resolve() not in source_paths:
             raise FileExistsError(f"Target became occupied: {dst}")
 
-    # Two-phase rename prevents swaps/cycles and minimizes partial-state risk.
     staged: list[tuple[RenameOp, Path]] = []
     completed: list[RenameOp] = []
     try:
         for i, op in enumerate(ops):
             src = Path(op.source)
-            temp = src.with_name(f".{src.name}.bulk-renamer-{os.getpid()}-{i}.tmp")
+            temp = _temp_for(src, i, "apply")
             if temp.exists():
                 raise FileExistsError(f"Temporary path exists: {temp}")
             src.rename(temp)
             staged.append((op, temp))
         for op, temp in staged:
-            Path(op.target).parent.mkdir(parents=True, exist_ok=True)
             temp.rename(Path(op.target))
             completed.append(op)
     except Exception:
-        # Best-effort transactional rollback, in reverse order.
         for op in reversed(completed):
             dst, src = Path(op.target), Path(op.source)
             if dst.exists() and not src.exists():
@@ -112,27 +112,50 @@ def apply(ops: list[RenameOp], manifest: Path) -> Path:
 
     manifest = manifest.expanduser().resolve()
     manifest.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "schema": 1,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "operations": [asdict(op) for op in ops],
-    }
+    payload = {"schema": 1, "created_at": datetime.now(timezone.utc).isoformat(),
+               "operations": [asdict(op) for op in ops]}
     manifest.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     return manifest
 
 
 def undo(manifest: Path) -> int:
     data = json.loads(manifest.read_text(encoding="utf-8"))
+    if data.get("schema") != 1:
+        raise ValueError("Unsupported manifest schema")
     ops = [RenameOp(**item) for item in data.get("operations", [])]
     if not ops:
         raise ValueError("Manifest contains no operations")
-    # Validate all operations before changing any file.
+
+    current_paths = {Path(op.target).resolve() for op in ops}
     for op in ops:
         current, original = Path(op.target), Path(op.source)
         if not current.is_file() or sha256(current) != op.sha256:
             raise RuntimeError(f"Renamed file changed or is missing: {current}")
-        if original.exists() and original.resolve() != current.resolve():
+        if original.exists() and original.resolve() not in current_paths:
             raise FileExistsError(f"Original path is occupied: {original}")
-    for op in reversed(ops):
-        Path(op.target).rename(Path(op.source))
+
+    staged: list[tuple[RenameOp, Path]] = []
+    restored: list[RenameOp] = []
+    try:
+        for i, op in enumerate(ops):
+            current = Path(op.target)
+            temp = _temp_for(current, i, "undo")
+            if temp.exists():
+                raise FileExistsError(f"Temporary path exists: {temp}")
+            current.rename(temp)
+            staged.append((op, temp))
+        for op, temp in reversed(staged):
+            temp.rename(Path(op.source))
+            restored.append(op)
+    except Exception:
+        # Recover toward the post-apply state if undo cannot finish.
+        for op in restored:
+            original, current = Path(op.source), Path(op.target)
+            if original.exists() and not current.exists():
+                original.rename(current)
+        for op, temp in staged:
+            current = Path(op.target)
+            if temp.exists() and not current.exists():
+                temp.rename(current)
+        raise
     return len(ops)
