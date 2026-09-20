@@ -48,11 +48,20 @@ def test_apply_refuses_changed_source(tmp_path):
     assert source.read_bytes() == b"after"
 
 
-def test_target_collision_is_rejected(tmp_path):
+def test_unrelated_occupied_target_is_rejected(tmp_path):
     write(tmp_path / "a.txt")
-    write(tmp_path / "file001.txt")
+    (tmp_path / "file001.txt").mkdir()
     with pytest.raises(FileExistsError):
         plan(tmp_path)
+
+
+def test_existing_source_name_can_be_reused_safely(tmp_path):
+    write(tmp_path / "a.txt", b"a")
+    write(tmp_path / "file001.txt", b"b")
+    ops = plan(tmp_path)
+    apply(ops, tmp_path / "m.json")
+    assert (tmp_path / "file001.txt").read_bytes() == b"a"
+    assert (tmp_path / "file002.txt").read_bytes() == b"b"
 
 
 def test_hidden_and_symlink_safety(tmp_path):
