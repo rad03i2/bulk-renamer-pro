@@ -55,13 +55,16 @@ def test_unrelated_occupied_target_is_rejected(tmp_path):
         plan(tmp_path)
 
 
-def test_existing_source_name_can_be_reused_safely(tmp_path):
+def test_existing_source_name_cycle_applies_and_undoes(tmp_path):
     write(tmp_path / "a.txt", b"a")
     write(tmp_path / "file001.txt", b"b")
-    ops = plan(tmp_path)
-    apply(ops, tmp_path / "m.json")
+    manifest = tmp_path / "m.json"
+    apply(plan(tmp_path), manifest)
     assert (tmp_path / "file001.txt").read_bytes() == b"a"
     assert (tmp_path / "file002.txt").read_bytes() == b"b"
+    assert undo(manifest) == 2
+    assert (tmp_path / "a.txt").read_bytes() == b"a"
+    assert (tmp_path / "file001.txt").read_bytes() == b"b"
 
 
 def test_hidden_and_symlink_safety(tmp_path):
